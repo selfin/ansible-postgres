@@ -1,0 +1,77 @@
+---
+- apt_repository: repo='deb http://apt.postgresql.org/pub/repos/apt/ xenial-pgdg main'
+- apt_key: url=http://apt.postgresql.org/pub/repos/apt/ACCC4CF8.asc state=present
+
+# if debian pgtune avaliable only in wheezy repo
+#- apt_repository: repo='deb http://httpredir.debian.org/debian wheezy main'
+
+- apt: pkg={{ item }} state=latest update_cache=yes
+  with_items:
+    - postgresql-{{ pg_version }}
+    - libpq-dev #just for python Psycopg2
+    - ptop
+    - sudo
+    - locales
+    - git
+    - python-psycopg2
+# ubuntu language packages
+#    - language-pack-ru
+#    - language-pack-en
+
+# debian docker language
+- user: name=postgres password=postgres update_password=always
+- lineinfile: dest=/etc/locale.gen line={{ item }}
+  with_items:
+    - "'ru_RU.UTF-8 UTF-8'"
+    - "'en_US.UTF-8 UTF-8'"
+
+#- command: locale-gen
+
+# Attention
+# Do not run this in container! on real system only
+# original script in files
+# - script: postgresql.kernel.sh
+- command: getconf PAGE_SIZE
+  register: page_size
+- command: getconf _PHYS_PAGES
+  register: phys_pages
+- lineinfile: dest=/etc/sysctl.conf regexp="{{ item.regexp }}" line="{{ item.line }}"
+  with_items:
+    - { regexp: '^kernel.shmall', line: 'kernel.shmall = {{ phys_pages.rc/2 }}' }
+    - { regexp: '^kernel.shmmax', line: 'kernel.shmmax = {{ phys_pages.rc/2*page_size.rc }}' }
+    - { regexp: '^fs.file-max', line: 'fs.file-max = 65536' }
+    - { regexp: '^vm.swappiness', line: 'vm.swappiness = 0' }
+  notify: reload sysctl
+
+# Attention end
+
+- command: cp /etc/postgresql/{{pg_version}}/main/postgresql.conf /etc/postgresql/{{pg_version}}/main/postgresql.conf.orig creates=/etc/postgresql/{{pg_version}}/main/postgresql.conf.orig
+
+- git: repo=https://github.com/gregs1104/pgtune.git dest=/opt/pgtune
+
+#- command: /opt/pgtune/pgtune -i /etc/postgresql/{{pg_version}}/main/postgresql.conf.orig -o /etc/postgresql/{{pg_version}}/main/postgresql.conf --type=Web creates=/etc/postgresql/{{pg_version}}/main/postgresql.conf
+#  notify:
+#    - restart postgresql
+- file: src=/etc/postgresql/{{pg_version}}/main/postgresql.conf dest=/etc/postgresql/postgresql.conf state=link force=yes
+- file: src=/etc/postgresql/{{pg_version}}/main/pg_hba.conf dest=/etc/postgresql/pg_hba.conf state=link force=yes
+
+- lineinfile: dest=/etc/postgresql/postgresql.conf regexp="{{ item.regexp }}" line="{{ item.line }}"
+  with_items:
+    - { regexp: '^listen_addresses', line: "listen_addresses = '*'" }
+    - { regexp: '^port', line: "port = {{pg_port}}" }
+
+  notify: restart postgresql
+
+- service: name=postgresql state=restarted enabled=yes
+
+- debug: var=pg_base
+- debug: var=pg_role
+- postgresql_db: name={{ pg_base }} encoding='UTF-8' lc_collate='ru_RU.UTF-8' lc_ctype='ru_RU.UTF-8' template='template0'  port={{ pg_port }} state=present
+  sudo: yes
+  sudo_user: postgres
+  when: (pg_base is defined and pg_role == 'master')
+
+- postgresql_user: db={{ pg_base }} name={{ pg_user }} password={{ pg_pass }} priv=ALL port={{ pg_port }} state=present
+  become: yes
+  become_user: postgres
+  when: (pg_base is defined and pg_role == 'master')

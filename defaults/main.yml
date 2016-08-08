@@ -1,0 +1,6 @@
+---
+pg_version: '9.5'
+pg_port: '5439'
+pg_base: 'testdb'
+pg_user: 'tester'
+pg_pass: 'tester'
